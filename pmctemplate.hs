@@ -149,10 +149,7 @@ stop = Concurrent(\x -> Stop) --error "You have to implement stop"
 -- ===================================
 
 atom :: IO a -> Concurrent a
-atom m = Concurrent(\c -> Atom ( do 
-    a <- m
-    return a
-   ))
+atom m = Concurrent(\c -> Atom (do a <- m; return (c a)))
    --error "You have to implement atom"
 
 
@@ -161,28 +158,73 @@ atom m = Concurrent(\c -> Atom ( do
 -- ===================================
 
 fork :: Concurrent a -> Concurrent ()
-fork = error "You have to implement fork"
+fork m = Concurrent(\c -> Fork (action m) (c ())) --error "You have to implement fork"
 
 par :: Concurrent a -> Concurrent a -> Concurrent a
-par = error "You have to implement par"
+par (Concurrent f1) (Concurrent f2) = Concurrent(\c -> Fork (f1 c) (f2 c)) -- error "You have to implement par" --
 
 
 -- ===================================
 -- Ex. 4
 -- ===================================
+-- Concurrent h >>= k  =  Concurrent (\f -> h (\x -> runConcurrent (k x) f))
+{-
+http://stackoverflow.com/questions/27190934/implementation-for-poor-mans-concurrency-monad
+The definition you are looking for reads something like
+
+Concurrent h >>= k  =  Concurrent (\f -> h (\x -> runConcurrent (k x) f))
+How did we get there? As always, we let the types do the work. :)
+
+Let us first introduce a helper function:
+
+runConcurrent                 :: Concurrent b -> (b -> Action) -> Action
+runConcurrent (Concurrent h)  =  h
+If you start out with the left-hand side of your definition
+
+Concurrent h >>= k  =  ...
+with h :: (a -> Action) -> Action and k :: a -> Concurrent b, then your goal is to replace ... with an expression of type Concurrent b, isn't it?
+
+How can we construct a value of type Concurrent b? One way is to apply our function k, but that won't work, because we don't have a suitable value of type a available as an argument. So, pretty much the only thing we can do is to apply the data constructor Concurrent which is of type ((b -> Action) -> b) -> Concurrent b.
+
+That gives:
+
+Concurrent h >>= k = Concurrent ...
+Now we have to go and find us an expression of type (b -> Action) -> b to supply as an argument for Concurrent. We know that expressions of function type can always be constructed through lambda-abstraction:
+
+Concurrent h >>= k  =  Concurrent (\f -> ...)
+This gives us f :: b -> Action and the obligation to replace ... with an expresion of type Action. Using one of the Action-constructors directly would be cheating of course ;). To guarantee the genericity of (>>=) (more precisely, to make sure that we end up obeying the monad laws), we treat Action as if it's an abstract datatype. Then, the only way to produce an Action-value is to apply the function h:
+
+Concurrent h >>= k  =  Concurrent (\f -> h ...)
+Hence, next we need to supply h with an argument of type a -> Action. That is a function type again, so we throw in another lambda:
+
+Concurrent h >>= k  =  Concurrent (\f -> h (\x -> ...))
+Hence, we have x :: a and need to construct a body of type Action. What can we do with a value of type a? We can supply it to the function k. This gives us a value of type Concurrent b, which we can then pass to our helper function runConcurrent:
+
+Concurrent h >>= k  =  Concurrent (\f -> h (\x -> runConcurrent (k x) ...))
+This gives us a function of type (b -> Action) -> Action and supplying f as an argument does the trick:
+
+Concurrent h >>= k  =  Concurrent (\f -> h (\x -> runConcurrent (k x) f))
+-}
+runConcurrent                 :: Concurrent b -> (b -> Action) -> Action
+runConcurrent (Concurrent h)  =  h
 
 instance Monad Concurrent where
-    (Concurrent f) >>= g = error "You have to implement >>="
+    (Concurrent ma) >>= f = Concurrent (\x -> ma(\y -> runConcurrent (f y) x)) 
     return x = Concurrent (\c -> c x)
 
+-- action (stop >>= (\c -> stop))
+-- action (fork stop >>= \_ -> fork stop)
 
 -- ===================================
 -- Ex. 5
 -- ===================================
 
 roundRobin :: [Action] -> IO ()
-roundRobin = error "You have to implement roundRobin"
-
+roundRobin [] = return ()
+roundRobin (a : as) = case a of 
+     Atom am    -> do a' <- am; roundRobin (as ++ [a'])
+     Fork a1 a2 -> roundRobin (as ++ [a1, a2])
+     Stop       -> roundRobin as
 -- ===================================
 -- Tests
 -- ===================================
